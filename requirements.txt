@@ -1,0 +1,30 @@
+# LegalRAG Requirements
+
+# FastAPI Backend
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Streamlit Frontend
+streamlit==1.35.0
+
+# PDF Processing
+pypdf==4.2.0
+
+# Embeddings
+sentence-transformers
+
+# Vector Database
+chromadb
+
+# LLM
+google-generativeai==0.7.2
+
+# HTTP Client
+httpx==0.27.0
+requests==2.32.3
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.7.4
+numpy

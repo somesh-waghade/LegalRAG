@@ -1,0 +1,33 @@
+# Environment
+.env
+*.env
+
+# Uploaded files
+uploads/
+
+# Vector DB storage
+vector_db/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+uploads/
+vector_db/
+__pycache__/
+*.pyc
