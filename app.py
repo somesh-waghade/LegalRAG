@@ -507,8 +507,8 @@ def start_backend():
         subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "backend.api:app",
              "--host", "0.0.0.0", "--port", "8000", "--log-level", "warning"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
             cwd=os.path.dirname(os.path.abspath(__file__)),
         )
         # Wait up to 8 seconds for it to start
