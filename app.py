@@ -509,7 +509,7 @@ def start_backend():
              "--host", "0.0.0.0", "--port", "8000", "--log-level", "warning"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            cwd=os.path.dirname(__file__),
+            cwd=os.path.dirname(os.path.abspath(__file__)),
         )
         # Wait up to 8 seconds for it to start
         for _ in range(16):
