@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: legalrag
+    env: docker
+    region: ohio
+    plan: free
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false # You will manually enter this in the Render dashboard
