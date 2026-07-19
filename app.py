@@ -4,22 +4,14 @@ app.py – Streamlit frontend for LegalRAG.
 A polished, professional legal document analysis interface with:
   - Document upload and management sidebar
   - Chat interface with conversation history
-  - Document summarization tab
   - Source citation display with page badges
 """
 
 import streamlit as st
-import requests
-import subprocess
-import sys
-import time
 import os
-import threading
+import uuid
+import tempfile
 from datetime import datetime
-
-# ─── Configuration ────────────────────────────────────────────────────────────
-
-API_BASE = os.getenv("FASTAPI_URL", "http://localhost:8000")
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
 
@@ -439,94 +431,67 @@ st.markdown("""
 </script>
 """, unsafe_allow_html=True)
 
-# ─── Helper: API calls ────────────────────────────────────────────────────────
+# ─── Direct Backend Integration (no FastAPI subprocess) ──────────────────────
 
-def api_health() -> bool:
-    try:
-        r = requests.get(f"{API_BASE}/health", timeout=3)
-        return r.status_code == 200
-    except Exception:
-        return False
+from backend.rag import ingest_document, answer_question
+from backend.retriever import delete_document, clear_all_documents
+
+# In-process document registry (session-scoped)
+def _get_registry():
+    if "doc_registry" not in st.session_state:
+        st.session_state.doc_registry = {}  # doc_id -> {filename, num_pages, num_chunks}
+    return st.session_state.doc_registry
 
 
 def api_upload(file_bytes: bytes, filename: str) -> dict:
-    files = {"file": (filename, file_bytes, "application/pdf")}
-    r = requests.post(f"{API_BASE}/upload", files=files, timeout=120)
-    r.raise_for_status()
-    return r.json()
+    """Save PDF to a temp file and run the ingest pipeline directly."""
+    doc_id = str(uuid.uuid4())
+    # Use a persistent temp dir so the file exists during ingestion
+    tmp_dir = tempfile.mkdtemp()
+    file_path = os.path.join(tmp_dir, filename)
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+    result = ingest_document(file_path, doc_id)
+    result["doc_id"] = doc_id
+    _get_registry()[doc_id] = result
+    return result
 
 
 def api_ask(question: str) -> dict:
-    payload = {"question": question, "n_results": 5}
-    r = requests.post(f"{API_BASE}/ask", json=payload, timeout=60)
-    r.raise_for_status()
-    return r.json()
+    """Run the RAG pipeline directly."""
+    return answer_question(question)
 
 
 def api_list_documents() -> list:
-    try:
-        r = requests.get(f"{API_BASE}/documents", timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return []
+    """Return documents from the in-session registry."""
+    return list(_get_registry().values())
 
 
 def api_clear() -> bool:
-    try:
-        r = requests.post(f"{API_BASE}/clear", timeout=10)
-        return r.status_code == 200
-    except Exception:
-        return False
+    """Wipe the vector DB and in-session registry."""
+    clear_all_documents()
+    _get_registry().clear()
+    return True
+
 
 def api_delete_document(doc_id: str) -> bool:
-    try:
-        r = requests.delete(f"{API_BASE}/documents/{doc_id}", timeout=10)
-        return r.status_code == 200
-    except Exception:
-        return False
+    """Delete a specific doc from vector DB and registry."""
+    delete_document(doc_id)
+    _get_registry().pop(doc_id, None)
+    return True
 
 
 # ─── Session State Init ───────────────────────────────────────────────────────
 
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []  # list of {role, content, sources, timestamp}
+    st.session_state.chat_history = []
 
 if "documents" not in st.session_state:
     st.session_state.documents = []
 
-if "api_online" not in st.session_state:
-    st.session_state.api_online = False
-
-
-# ─── Auto-start FastAPI backend ───────────────────────────────────────────────
-
-def start_backend():
-    """Start FastAPI backend as a subprocess if not already running."""
-    if not api_health():
-        subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "backend.api:app",
-             "--host", "0.0.0.0", "--port", "8000", "--log-level", "warning"],
-            stdout=sys.stdout,
-            stderr=sys.stderr,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-        )
-        # Wait up to 8 seconds for it to start
-        for _ in range(16):
-            time.sleep(0.5)
-            if api_health():
-                break
-
-if "backend_started" not in st.session_state:
-    st.session_state.backend_started = True
-    threading.Thread(target=start_backend, daemon=True).start()
-
-
-# ─── Refresh documents & API status ──────────────────────────────────────────
-
-st.session_state.api_online = api_health()
-if st.session_state.api_online:
-    st.session_state.documents = api_list_documents()
+# Always "online" — backend is in-process
+st.session_state.api_online = True
+st.session_state.documents = api_list_documents()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
