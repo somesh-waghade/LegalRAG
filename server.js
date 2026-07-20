@@ -4,7 +4,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
+const FASTAPI_URL = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
 
 // Parse JSON and URL-encoded bodies (for other routes if needed)
 app.use(express.json());
