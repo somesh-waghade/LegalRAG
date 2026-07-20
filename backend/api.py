@@ -13,7 +13,9 @@ import os
 import uuid
 import json
 import shutil
+import logging
 from typing import List, Optional
+from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +23,8 @@ from pydantic import BaseModel
 
 from backend.rag import ingest_document, answer_question
 from backend.retriever import clear_all_documents, delete_document
+
+logger = logging.getLogger(__name__)
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 
@@ -105,29 +109,35 @@ async def upload_document(file: UploadFile = File(...)):
     Upload a PDF document and run the full ingestion pipeline.
     Returns a doc_id used to reference this document in future requests.
     """
-    if not file.filename.lower().endswith(".pdf"):
+    original_filename = Path(file.filename or "").name
+    if not original_filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
     doc_id = str(uuid.uuid4())
-    save_path = os.path.join(UPLOADS_DIR, f"{doc_id}_{file.filename}")
+    save_path = os.path.join(UPLOADS_DIR, f"{doc_id}_{original_filename}")
 
     # Save uploaded file
-    with open(save_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    try:
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as e:
+        logger.exception("Failed to save uploaded file")
+        raise HTTPException(status_code=500, detail=f"Could not save upload: {str(e)}")
 
     # Run ingestion pipeline
     try:
         stats = ingest_document(save_path, doc_id)
     except Exception as e:
-        os.remove(save_path)
+        logger.exception("Ingestion failed for uploaded file: %s", original_filename)
+        if os.path.exists(save_path):
+            os.remove(save_path)
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
 
     # Register document
     registry = _load_registry()
     registry[doc_id] = {
         "doc_id": doc_id,
-        "filename": file.filename,
+        "filename": original_filename,
         "num_pages": stats["num_pages"],
         "num_chunks": stats["num_chunks"],
         "file_path": save_path,
@@ -136,10 +146,10 @@ async def upload_document(file: UploadFile = File(...)):
 
     return UploadResponse(
         doc_id=doc_id,
-        filename=file.filename,
+        filename=original_filename,
         num_pages=stats["num_pages"],
         num_chunks=stats["num_chunks"],
-        message=f"Successfully processed '{file.filename}' into {stats['num_chunks']} chunks.",
+        message=f"Successfully processed '{original_filename}' into {stats['num_chunks']} chunks.",
     )
 
 

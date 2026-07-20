@@ -1,13 +1,12 @@
 const express = require('express');
 const path = require('path');
+const http = require('http');
+const https = require('https');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
-
-// Parse JSON and URL-encoded bodies (for other routes if needed)
-app.use(express.json());
 
 // Serve static assets from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
@@ -40,58 +39,46 @@ if (FASTAPI_URL.includes('127.0.0.1') || FASTAPI_URL.includes('localhost')) {
   });
 }
 
-// Simple proxy logic using native fetch (Node.js 18+)
+// Stream proxy for API requests. This avoids buffering multipart uploads and
+// works consistently across Node versions used by Render.
 app.all('/api/*', async (req, res) => {
   const targetPath = req.params[0] || '';
-  const url = `${FASTAPI_URL}/${targetPath}`;
+  const targetUrl = new URL(`${FASTAPI_URL}/${targetPath}`);
+  targetUrl.search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
 
-  const fetchOptions = {
+  const headers = { ...req.headers };
+  delete headers.host;
+
+  const options = {
     method: req.method,
-    headers: {},
+    hostname: targetUrl.hostname,
+    port: targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80),
+    path: `${targetUrl.pathname}${targetUrl.search}`,
+    headers,
   };
 
-  // Forward select headers, but ignore Host to avoid routing issues
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (key.toLowerCase() !== 'host') {
-      fetchOptions.headers[key] = value;
-    }
-  }
+  const transport = targetUrl.protocol === 'https:' ? https : http;
 
-  // Forward body if present
-  if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
-    // If it's multipart (file upload), we need to forward it as a raw stream
-    if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
-      // For multipart form uploads, we can use express middleware or forward the raw buffer/stream.
-      // A simple way to handle this in Express is to read the raw request stream.
-      fetchOptions.body = req; 
-      // Duplex is required for streaming bodies in Node.js fetch
-      fetchOptions.duplex = 'half';
-    } else {
-      fetchOptions.body = JSON.stringify(req.body);
-    }
-  }
-
-  try {
-    const response = await fetch(url, fetchOptions);
-    
-    // Set response headers
-    res.status(response.status);
-    response.headers.forEach((value, key) => {
-      res.setHeader(key, value);
+  const proxyReq = transport.request(options, (proxyRes) => {
+    res.status(proxyRes.statusCode || 502);
+    Object.entries(proxyRes.headers).forEach(([key, value]) => {
+      if (value !== undefined) {
+        res.setHeader(key, value);
+      }
     });
+    proxyRes.pipe(res);
+  });
 
-    // Send the response body
-    const bodyReader = response.body;
-    if (bodyReader) {
-      const nodeStream = require('stream').Readable.fromWeb(bodyReader);
-      nodeStream.pipe(res);
-    } else {
+  proxyReq.on('error', (error) => {
+    console.error(`[Proxy Error] Failed to proxy to ${targetUrl.toString()}:`, error);
+    if (res.headersSent) {
       res.end();
+      return;
     }
-  } catch (error) {
-    console.error(`[Proxy Error] Failed to proxy to ${url}:`, error);
     res.status(502).json({ error: 'Failed to communicate with backend API' });
-  }
+  });
+
+  req.pipe(proxyReq);
 });
 
 // For SPA routing, serve index.html for all other routes

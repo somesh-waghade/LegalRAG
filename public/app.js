@@ -210,7 +210,16 @@ document.addEventListener('DOMContentLoaded', () => {
           alert(`✓ Upload successful!\nIndexed ${result.num_chunks} chunks from ${result.num_pages} pages.`);
           await loadDocuments();
         } else {
-          alert(`Upload failed: ${xhr.statusText}`);
+          let message = xhr.statusText || 'Unknown error';
+          try {
+            const payload = JSON.parse(xhr.responseText);
+            message = payload.detail || payload.error || message;
+          } catch (error) {
+            if (xhr.responseText) {
+              message = xhr.responseText;
+            }
+          }
+          alert(`Upload failed: ${message}`);
         }
       };
 
