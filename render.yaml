@@ -8,3 +8,9 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false # You will manually enter this in the Render dashboard
+      - key: GEMINI_API_KEY
+        sync: false # Recommended free demo embedding provider
+      - key: OPENAI_API_KEY
+        sync: false # Optional: enables OpenAI embeddings for better retrieval
+      - key: EMBEDDING_PROVIDER
+        value: auto

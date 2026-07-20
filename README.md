@@ -35,9 +35,15 @@ pip install -r requirements.txt
 copy .env.example .env    # Windows
 cp .env.example .env      # Linux/macOS
 
-# Edit .env and add your Gemini API key
-# Get your key from: https://aistudio.google.com/app/apikey
-GEMINI_API_KEY=your_key_here
+# Edit .env and add your API keys
+GROQ_API_KEY=your_groq_key_here
+
+# Recommended free demo embedding provider
+GEMINI_API_KEY=your_gemini_key_here
+EMBEDDING_PROVIDER=auto
+
+# Optional paid alternative for embeddings
+OPENAI_API_KEY=your_openai_key_here
 ```
 
 ### 5. Run the Application
@@ -101,8 +107,8 @@ Interactive API docs: **http://localhost:8000/docs**
 
 | Layer | Technology |
 |-------|-----------|
-| LLM | Google Gemini 1.5 Flash |
-| Embeddings | `all-MiniLM-L6-v2` (sentence-transformers) |
+| LLM | Groq |
+| Embeddings | Gemini free-tier embeddings, OpenAI optional, Hugging Face fallback, or local fallback |
 | Vector DB | ChromaDB (persistent) |
 | PDF Parser | PyMuPDF |
 | Backend | FastAPI + Uvicorn |
