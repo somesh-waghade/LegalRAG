@@ -7,12 +7,13 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
+const shouldSpawnBackend = FASTAPI_URL.includes('127.0.0.1') || FASTAPI_URL.includes('localhost');
 
 // Serve static assets from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Spawn the FastAPI backend as a child process if targeting localhost/127.0.0.1
-if (FASTAPI_URL.includes('127.0.0.1') || FASTAPI_URL.includes('localhost')) {
+if (shouldSpawnBackend) {
   const { spawn } = require('child_process');
   console.log('[Frontend] Spawning FastAPI backend subprocess...');
   
@@ -39,13 +40,11 @@ if (FASTAPI_URL.includes('127.0.0.1') || FASTAPI_URL.includes('localhost')) {
   });
 }
 
-// Stream proxy for API requests. This avoids buffering multipart uploads and
-// works consistently across Node versions used by Render.
-app.all('/api/*', async (req, res) => {
-  const targetPath = req.params[0] || '';
-  const targetUrl = new URL(`${FASTAPI_URL}/${targetPath}`);
-  targetUrl.search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
+function proxyRequest(req, res, targetUrl) {
   const headers = { ...req.headers };
   delete headers.host;
 
@@ -75,10 +74,44 @@ app.all('/api/*', async (req, res) => {
       res.end();
       return;
     }
-    res.status(502).json({ error: 'Failed to communicate with backend API' });
+    res.status(503).json({ error: 'Backend API is starting. Please retry in a moment.' });
   });
 
   req.pipe(proxyReq);
+}
+
+async function waitForBackend() {
+  if (!shouldSpawnBackend) {
+    return;
+  }
+
+  const healthUrl = new URL('/health', FASTAPI_URL);
+  for (let attempt = 1; attempt <= 40; attempt += 1) {
+    try {
+      const response = await fetch(healthUrl);
+      if (response.ok) {
+        console.log('[Frontend] FastAPI backend is ready.');
+        return;
+      }
+    } catch (error) {
+      if (attempt === 1) {
+        console.log('[Frontend] Waiting for FastAPI backend to accept connections...');
+      }
+    }
+    await sleep(500);
+  }
+
+  console.warn('[Frontend] FastAPI backend was not ready after 20 seconds; starting frontend anyway.');
+}
+
+// Stream proxy for API requests. This avoids buffering multipart uploads and
+// works consistently across Node versions used by Render.
+app.all('/api/*', async (req, res) => {
+  const targetPath = req.params[0] || '';
+  const targetUrl = new URL(`${FASTAPI_URL}/${targetPath}`);
+  targetUrl.search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+
+  proxyRequest(req, res, targetUrl);
 });
 
 // For SPA routing, serve index.html for all other routes
@@ -86,7 +119,9 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`[Frontend] Server running at http://localhost:${PORT}`);
-  console.log(`[Frontend] Proxying /api/* requests to: ${FASTAPI_URL}`);
+waitForBackend().finally(() => {
+  app.listen(PORT, () => {
+    console.log(`[Frontend] Server running at http://localhost:${PORT}`);
+    console.log(`[Frontend] Proxying /api/* requests to: ${FASTAPI_URL}`);
+  });
 });

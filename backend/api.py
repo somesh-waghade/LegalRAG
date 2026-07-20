@@ -103,6 +103,13 @@ def health_check():
     return {"status": "ok", "service": "LegalRAG API"}
 
 
+@app.get("/")
+@app.head("/")
+def root_health_check():
+    """Root endpoint for platform health checks."""
+    return {"status": "ok", "service": "LegalRAG API"}
+
+
 @app.post("/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):
     """
