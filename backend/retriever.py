@@ -1,30 +1,55 @@
 """
-retriever.py – ChromaDB vector store operations for LegalRAG.
+retriever.py - lightweight JSON vector store for LegalRAG demos.
 
-Each document gets its own ChromaDB collection named by its doc_id (UUID).
-This enables per-document or multi-document queries while keeping data isolated.
+This avoids ChromaDB's native SQLite/runtime issues on free Render instances
+while keeping the same add/query/delete interface used by the RAG pipeline.
 """
 
-import chromadb
-from chromadb.config import Settings
+import json
+import math
 import os
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List
 
-# Persistent storage path
+
 VECTOR_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "vector_db")
-
-# Singleton ChromaDB client
-_client: Optional[chromadb.PersistentClient] = None
+STORE_FILE = os.path.join(VECTOR_DB_PATH, "session_docs.json")
 
 
-def _get_client() -> chromadb.PersistentClient:
-    """Lazy-initialize and return the ChromaDB persistent client."""
-    global _client
-    if _client is None:
-        os.makedirs(VECTOR_DB_PATH, exist_ok=True)
-        _client = chromadb.PersistentClient(path=VECTOR_DB_PATH)
-        print(f"[Retriever] ChromaDB initialized at: {VECTOR_DB_PATH}")
-    return _client
+def _load_store() -> List[Dict[str, Any]]:
+    os.makedirs(VECTOR_DB_PATH, exist_ok=True)
+    if not os.path.exists(STORE_FILE):
+        return []
+
+    with open(STORE_FILE, "r", encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            return []
+
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _save_store(records: List[Dict[str, Any]]) -> None:
+    os.makedirs(VECTOR_DB_PATH, exist_ok=True)
+    temp_file = f"{STORE_FILE}.tmp"
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(records, f)
+    os.replace(temp_file, STORE_FILE)
+
+
+def _cosine_similarity(left: List[float], right: List[float]) -> float:
+    if not left or not right:
+        return 0.0
+
+    size = min(len(left), len(right))
+    dot = sum(left[i] * right[i] for i in range(size))
+    left_norm = math.sqrt(sum(value * value for value in left[:size]))
+    right_norm = math.sqrt(sum(value * value for value in right[:size]))
+    if not left_norm or not right_norm:
+        return 0.0
+    return dot / (left_norm * right_norm)
 
 
 def add_documents(
@@ -33,34 +58,27 @@ def add_documents(
     embeddings: List[List[float]],
 ) -> int:
     """
-    Store document chunks and their embeddings in the unified session collection.
+    Store document chunks and their embeddings in the local JSON vector store.
     """
-    client = _get_client()
-    collection = client.get_or_create_collection(
-        name="session_docs",
-        metadata={"hnsw:space": "cosine"},
-    )
+    if len(chunks) != len(embeddings):
+        raise ValueError(f"Chunk/embedding count mismatch: {len(chunks)} chunks, {len(embeddings)} embeddings")
 
-    ids = [f"{doc_id}_{chunk['chunk_id']}" for chunk in chunks]
-    documents = [chunk["text"] for chunk in chunks]
-    metadatas = [
-        {
-            "page_num": chunk["page_num"],
-            "source_filename": chunk["source_filename"],
-            "chunk_id": chunk["chunk_id"],
-            "doc_id": doc_id,
-        }
-        for chunk in chunks
-    ]
+    records = [record for record in _load_store() if record.get("doc_id") != doc_id]
+    for chunk, embedding in zip(chunks, embeddings):
+        records.append(
+            {
+                "id": f"{doc_id}_{chunk['chunk_id']}",
+                "doc_id": doc_id,
+                "chunk_id": chunk["chunk_id"],
+                "text": chunk["text"],
+                "page_num": chunk["page_num"],
+                "source_filename": chunk["source_filename"],
+                "embedding": embedding,
+            }
+        )
 
-    collection.add(
-        ids=ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas,
-    )
-
-    print(f"[Retriever] Stored {len(chunks)} chunks for doc_id={doc_id} into unified session.")
+    _save_store(records)
+    print(f"[Retriever] Stored {len(chunks)} chunks for doc_id={doc_id} in JSON vector store.")
     return len(chunks)
 
 
@@ -69,61 +87,47 @@ def query_documents(
     n_results: int = 5,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve the most relevant chunks across all uploaded documents simultaneously.
+    Retrieve the most relevant chunks across all uploaded documents.
     """
-    client = _get_client()
-    try:
-        collection = client.get_collection(name="session_docs")
-    except Exception:
+    records = _load_store()
+    if not records:
         return []
 
-    count = collection.count()
-    if count == 0:
-        return []
+    scored = []
+    for record in records:
+        score = _cosine_similarity(query_embedding, record.get("embedding", []))
+        scored.append((score, record))
 
-    n_results = min(n_results, count)
-
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n_results,
-        include=["documents", "metadatas", "distances"],
-    )
-
+    scored.sort(key=lambda item: item[0], reverse=True)
     retrieved = []
-    for i in range(len(results["documents"][0])):
-        retrieved.append({
-            "text": results["documents"][0][i],
-            "page_num": results["metadatas"][0][i]["page_num"],
-            "source_filename": results["metadatas"][0][i]["source_filename"],
-            "distance": results["distances"][0][i],
-        })
+    for score, record in scored[: max(1, n_results)]:
+        retrieved.append(
+            {
+                "text": record["text"],
+                "page_num": record["page_num"],
+                "source_filename": record["source_filename"],
+                "distance": 1.0 - score,
+            }
+        )
 
     return retrieved
 
 
 def delete_document(doc_id: str) -> bool:
     """
-    Delete a specific document's chunks from the unified session collection.
+    Delete a specific document's chunks from the local JSON vector store.
     """
-    client = _get_client()
-    try:
-        collection = client.get_collection(name="session_docs")
-        # ChromaDB allows deleting by metadata
-        collection.delete(where={"doc_id": doc_id})
-        print(f"[Retriever] Deleted chunks for doc_id={doc_id} from session collection.")
-        return True
-    except Exception:
-        return False
+    records = _load_store()
+    filtered = [record for record in records if record.get("doc_id") != doc_id]
+    _save_store(filtered)
+    print(f"[Retriever] Deleted chunks for doc_id={doc_id} from JSON vector store.")
+    return True
 
 
 def clear_all_documents() -> bool:
     """
-    Delete the entire session collection from ChromaDB.
+    Delete all session vectors.
     """
-    client = _get_client()
-    try:
-        client.delete_collection(name="session_docs")
-        print("[Retriever] Cleared session collection.")
-        return True
-    except Exception:
-        return False
+    _save_store([])
+    print("[Retriever] Cleared JSON vector store.")
+    return True

@@ -3,8 +3,6 @@ import math
 import os
 from typing import List
 
-import requests
-
 
 EMBEDDING_DIMENSION = 384
 OPENAI_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
@@ -27,6 +25,8 @@ def _embedding_provider() -> str:
 
 
 def _post_json(url: str, headers: dict, payload: dict, timeout: int = 60) -> dict | list:
+    import requests
+
     response = requests.post(url, headers=headers, json=payload, timeout=timeout)
     if response.status_code >= 400:
         raise RuntimeError(f"API error ({response.status_code}): {response.text}")
