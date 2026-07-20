@@ -12,7 +12,6 @@ streamlit==1.35.0
 pypdf==4.2.0
 
 # Embeddings
-sentence-transformers
 
 # Vector Database
 chromadb

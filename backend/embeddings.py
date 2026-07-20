@@ -1,72 +1,59 @@
-"""
-embeddings.py – Generate text embeddings using sentence-transformers.
-
-Uses the lightweight all-MiniLM-L6-v2 model which provides a good balance
-between embedding quality and inference speed for semantic search tasks.
-"""
-
-from sentence_transformers import SentenceTransformer
+import requests
 from typing import List
-import numpy as np
+import os
 
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
 
-# Singleton model instance – loaded once and reused across requests
-_model: SentenceTransformer | None = None
+# Optional Hugging Face token from environment variables to increase rate limits
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 
-MODEL_NAME = "all-MiniLM-L6-v2"
-
-
-def _get_model() -> SentenceTransformer:
-    """Lazy-load the embedding model (singleton pattern)."""
-    global _model
-    if _model is None:
-        print(f"[Embeddings] Loading model: {MODEL_NAME}")
-        _model = SentenceTransformer(MODEL_NAME)
-        print("[Embeddings] Model loaded successfully.")
-    return _model
+def _query_hf_api(payload: dict) -> list:
+    headers = {}
+    if HF_TOKEN:
+        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+    
+    # Try up to 3 times in case the model is loading
+    for attempt in range(3):
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 503:
+            # Model is loading, wait and retry
+            import time
+            time.sleep(5)
+            continue
+        else:
+            raise Exception(f"Hugging Face Inference API error ({response.status_code}): {response.text}")
+    raise Exception("Hugging Face model failed to load in time.")
 
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
     """
-    Generate embeddings for a list of text strings.
-
-    Args:
-        texts: List of strings to embed.
-
-    Returns:
-        List of embedding vectors (each vector is a list of floats).
+    Generate embeddings for a list of text strings using Hugging Face Inference API.
     """
-    model = _get_model()
-    embeddings = model.encode(
-        texts,
-        show_progress_bar=False,
-        convert_to_numpy=True,
-        normalize_embeddings=True,   # L2-normalize for cosine similarity
-    )
-    return embeddings.tolist()
+    if not texts:
+        return []
+    embeddings = _query_hf_api({"inputs": texts})
+    # HF sometimes returns a flat list if there's only 1 text, normalize to list of lists
+    if isinstance(embeddings, list) and len(embeddings) > 0 and not isinstance(embeddings[0], list):
+        return [embeddings]
+    return embeddings
 
 
 def embed_query(query: str) -> List[float]:
     """
     Generate a single embedding for a search query.
-
-    Args:
-        query: The user's question or search text.
-
-    Returns:
-        A single embedding vector as a list of floats.
     """
-    model = _get_model()
-    embedding = model.encode(
-        query,
-        show_progress_bar=False,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
-    return embedding.tolist()
+    embeddings = _query_hf_api({"inputs": [query]})
+    if isinstance(embeddings, list) and len(embeddings) > 0:
+        if isinstance(embeddings[0], list):
+            return embeddings[0]
+        return embeddings
+    raise ValueError("Unexpected response format from Hugging Face API.")
 
 
 def get_embedding_dimension() -> int:
-    """Return the dimensionality of the embedding model's output."""
-    model = _get_model()
-    return model.get_sentence_embedding_dimension()
+    """Return the dimensionality of all-MiniLM-L6-v2 (384)."""
+    return 384
+
