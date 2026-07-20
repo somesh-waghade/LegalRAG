@@ -2,6 +2,7 @@ services:
   - type: web
     name: legalrag
     env: docker
+    port: 3000
     region: ohio
     plan: free
     envVars:
