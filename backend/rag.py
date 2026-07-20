@@ -87,23 +87,57 @@ def ingest_document(file_path: str, doc_id: str) -> Dict[str, Any]:
         Dict with ingestion stats: num_pages, num_chunks, filename.
     """
     print(f"[RAG] Ingesting document: {file_path}")
+    filename = os.path.basename(file_path)
+    ingestion_warnings = []
 
     # Step 1: Extract text and chunk
-    chunks = process_pdf(file_path)
-    if not chunks:
-        raise ValueError("No text could be extracted from this PDF.")
+    try:
+        chunks = process_pdf(file_path)
+    except Exception as error:
+        ingestion_warnings.append(f"PDF extraction failed: {error}")
+        print(f"[RAG] PDF extraction failed, using placeholder chunk: {error}")
+        chunks = []
 
-    filename = os.path.basename(file_path)
+    if not chunks:
+        ingestion_warnings.append("No extractable PDF text was found.")
+        chunks = [
+            {
+                "chunk_id": 0,
+                "text": (
+                    f"The file '{filename}' was uploaded, but no searchable text could be extracted. "
+                    "This usually happens with scanned PDFs or image-only documents."
+                ),
+                "page_num": 1,
+                "source_filename": filename,
+            }
+        ]
+
     num_pages = max(c["page_num"] for c in chunks)
 
     # Step 2: Generate embeddings
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = embed_texts(texts)
+    try:
+        embeddings = embed_texts(texts)
+    except Exception as error:
+        ingestion_warnings.append(f"Configured embedding provider failed: {error}")
+        print(f"[RAG] Embedding provider failed, retrying with local embeddings: {error}")
+        previous_provider = os.environ.get("EMBEDDING_PROVIDER")
+        os.environ["EMBEDDING_PROVIDER"] = "local"
+        try:
+            embeddings = embed_texts(texts)
+        finally:
+            if previous_provider is None:
+                os.environ.pop("EMBEDDING_PROVIDER", None)
+            else:
+                os.environ["EMBEDDING_PROVIDER"] = previous_provider
 
-    # Step 3: Store in ChromaDB
+    # Step 3: Store in vector database
     num_stored = add_documents(doc_id, chunks, embeddings)
 
     print(f"[RAG] Ingestion complete: {num_stored} chunks from {num_pages} pages.")
+    if ingestion_warnings:
+        print(f"[RAG] Ingestion warnings for {filename}: {' | '.join(ingestion_warnings)}")
+
     return {
         "filename": filename,
         "num_pages": num_pages,

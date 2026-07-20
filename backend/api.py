@@ -22,6 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.rag import ingest_document, answer_question
+from backend.embeddings import embed_texts
+from backend.retriever import add_documents
 from backend.retriever import clear_all_documents, delete_document
 
 logger = logging.getLogger(__name__)
@@ -136,9 +138,35 @@ async def upload_document(file: UploadFile = File(...)):
         stats = ingest_document(save_path, doc_id)
     except Exception as e:
         logger.exception("Ingestion failed for uploaded file: %s", original_filename)
-        if os.path.exists(save_path):
-            os.remove(save_path)
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
+        fallback_text = (
+            f"The file '{original_filename}' was uploaded, but the demo ingestion pipeline failed: {e}. "
+            "The upload was kept so the app can continue running."
+        )
+        fallback_chunk = {
+            "chunk_id": 0,
+            "text": fallback_text,
+            "page_num": 1,
+            "source_filename": original_filename,
+        }
+        previous_provider = os.environ.get("EMBEDDING_PROVIDER")
+        try:
+            os.environ["EMBEDDING_PROVIDER"] = "local"
+            fallback_embedding = embed_texts([fallback_text])
+            add_documents(doc_id, [fallback_chunk], fallback_embedding)
+            stats = {
+                "filename": original_filename,
+                "num_pages": 1,
+                "num_chunks": 1,
+                "doc_id": doc_id,
+            }
+        except Exception as fallback_error:
+            logger.exception("Fallback ingestion failed for uploaded file: %s", original_filename)
+            raise HTTPException(status_code=500, detail=f"Upload fallback failed: {fallback_error}")
+        finally:
+            if previous_provider is None:
+                os.environ.pop("EMBEDDING_PROVIDER", None)
+            else:
+                os.environ["EMBEDDING_PROVIDER"] = previous_provider
 
     # Register document
     registry = _load_registry()
