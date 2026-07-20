@@ -25,5 +25,5 @@ COPY . .
 EXPOSE 3000
 EXPOSE 8000
 
-# Start both the Python API and Node.js Web Server
-CMD python -m uvicorn backend.api:app --host 0.0.0.0 --port 8000 & npm start
+# Start Node.js Web Server (which internally spawns the Python API)
+CMD ["npm", "start"]

@@ -12,6 +12,34 @@ app.use(express.json());
 // Serve static assets from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Spawn the FastAPI backend as a child process if targeting localhost/127.0.0.1
+if (FASTAPI_URL.includes('127.0.0.1') || FASTAPI_URL.includes('localhost')) {
+  const { spawn } = require('child_process');
+  console.log('[Frontend] Spawning FastAPI backend subprocess...');
+  
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+  const backend = spawn(pythonCmd, [
+    '-m', 'uvicorn', 'backend.api:app',
+    '--host', '127.0.0.1',
+    '--port', '8000',
+    '--log-level', 'info'
+  ], {
+    cwd: __dirname
+  });
+
+  backend.stdout.on('data', (data) => {
+    process.stdout.write(`[Backend] ${data}`);
+  });
+
+  backend.stderr.on('data', (data) => {
+    process.stderr.write(`[Backend ERROR] ${data}`);
+  });
+
+  backend.on('close', (code) => {
+    console.log(`[Backend] Process exited with code ${code}`);
+  });
+}
+
 // Simple proxy logic using native fetch (Node.js 18+)
 app.all('/api/*', async (req, res) => {
   const targetPath = req.params[0] || '';
